@@ -1,0 +1,6 @@
+node_modules/
+*.mp4
+*.wav
+*.mp3
+meta.json
+still_*.png

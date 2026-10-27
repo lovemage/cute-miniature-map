@@ -1,0 +1,324 @@
+<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><title>台中 台灣大道漫遊</title>
+<body style="margin:0;background:#FFFBF2;display:flex;justify-content:center;align-items:center;height:100vh">
+<canvas id="c" width="1080" height="1080" style="max-width:100vw;max-height:100vh"></canvas>
+<script>
+const W=1080,H=1080,FPS=30,DUR=30,N=FPS*DUR;
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+// ---- seeded RNG：保证同一帧每次渲染完全一样 ----
+function rng(s){return()=>{s|=0;s=s+0x6D2B79F5|0;let t=Math.imul(s^s>>>15,1|s);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2,smooth=u=>u<=0?0:u>=1?1:u*u*(3-2*u);
+const P={paper:'#FFFBF2',ink:'#2B2B3A',ground:'#F4EDE0',road:'#E9E6EF',walk:'#F3E3C8',water:'#2F5BEA',sky:'#7EC8F2',mint:'#9ED9B4',green:'#3FA66B',
+ rape:'#F9C93C',coral:'#F6895C',pink:'#F48FB1',lilac:'#C9A7F0',red:'#E5484D',lawn:'#C4E8CF',cream:'#FFF1D6',gold:'#F2B53A',gray:'#8A8797',bus:'#F4C9B8'};
+const HOUSE=['#F7C6C7','#A9D8F5','#9ED9B4','#C9A7F0','#FFE08A','#F6A27C','#FFF4E0','#D9A57A'];
+const TOWER=['#DCE7F5','#F2E6F7','#E3F4EA','#FFF1D6','#F7D9D9','#CFE3F7','#C9A7F0','#A9D8F5','#FFE08A'];
+const ACC=['#E2643F','#3B8FD9','#2E9A5E','#8E5CD9','#D99A00','#E0608F'];
+const ZH='"Microsoft JhengHei","Noto Sans TC","PingFang TC","Noto Sans CJK TC",sans-serif',EN='"Segoe UI","Helvetica Neue",Arial,sans-serif';
+const pick=(R,a)=>a[R()*a.length|0],hit=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y,mod=(a,b)=>((a%b)+b)%b;
+function circ(g,x,y,r,c){g.fillStyle=c;g.beginPath();g.arc(x,y,r,0,7);g.fill()}
+function tex(g,x,y,w,h,k,a){g.save();g.beginPath();g.rect(x,y,w,h);g.clip();g.fillStyle=g.strokeStyle=`rgba(255,255,255,${a||.35})`;
+ if(k==0){for(let yy=y,r=0;yy<y+h;yy+=5,r++)for(let xx=x+(r%2)*2.5;xx<x+w;xx+=5)g.fillRect(xx,yy,1.3,1.3)}
+ else if(k==1){for(let xx=x+1;xx<x+w;xx+=4)g.fillRect(xx,y,1,h)}
+ else{g.lineWidth=1;g.beginPath();for(let d=-h;d<w;d+=5){g.moveTo(x+d,y+h);g.lineTo(x+d+h,y)}g.stroke()}
+ g.restore()}
+function shadowRect(g,x,y,w,h,ox=2.5,oy=ox){g.fillStyle='rgba(43,43,58,.13)';g.fillRect(x+ox,y+oy,w,h)}
+
+// ================= 世界：台灣大道沿 x 轴（西→东），北在上 =================
+const X0=-700,X1=3400,Y0=-640,Y1=640,BH=28;          // 台灣大道半宽：人行道 23–28 · 车道 10–23 · 公车专用道 4–10 · 中央分隔岛 0–4
+const XS=[[-660,5],[-500,5],[-340,6],[-120,6],[0,7],[240,6],[410,4],[600,6],[930,9],[1080,5],[1230,6],[1310,6],[1525,4],[1595,4],
+ [1780,6],[1940,5],[2100,6],[2225,4],[2275,4],[2420,5],[2580,6],[2750,7],[2900,5],[3060,6],[3250,5]];
+const YS=[[-620,5],[-480,6],[-320,5],[-160,6],[0,BH],[160,6],[320,5],[480,6],[620,5]];
+const GREEN={x:1529,x2:1591},RIVER={x:2229,x2:2271,c:2250},MRTX=930;
+// 地标占地
+const LM={theater:{x:30,y:150,w:200,h:180},maple:{x:-330,y:32,w:206,h:122},malls:{x:254,y:34,w:312,h:120},hall:{x:612,y:34,w:308,h:200},
+ axis:{x:722,y:234,w:86,h:410},mrt:{x:896,y:-78,w:68,h:46},museum:{x:1318,y:-300,w:204,h:268},green:{x:GREEN.x,y:Y0,w:GREEN.x2-GREEN.x,h:Y1-Y0},
+ cmp:{x:1602,y:34,w:170,h:118},shenji:{x:1602,y:236,w:172,h:120},river:{x:RIVER.x,y:Y0,w:RIVER.x2-RIVER.x,h:Y1-Y0},
+ market:{x:2760,y:34,w:132,h:196},park:{x:2858,y:-390,w:262,h:310}};
+const RES=Object.values(LM);
+// 路线：歌劇院前惠來路 → 北上台灣大道 → 东行 → 三民路南转 → 第二市場
+const ROUTE=[[0,190],[0,0],[2750,0],[2750,88]];
+const SEGL=ROUTE.slice(1).map((p,k)=>Math.hypot(p[0]-ROUTE[k][0],p[1]-ROUTE[k][1])),L=Math.round(SEGL.reduce((a,b)=>a+b,0));
+function ptAt(s){s=Math.max(0,Math.min(L,s));for(let k=0;k<SEGL.length;k++){if(s<=SEGL[k]||k==SEGL.length-1){const a=ROUTE[k],b=ROUTE[k+1],u=Math.min(1,s/SEGL[k]);
+ return[a[0]+(b[0]-a[0])*u,a[1]+(b[1]-a[1])*u,k]}s-=SEGL[k]}}
+// 景点（按路线顺序）：s = 路线上揭示该景点的位置
+const STOPS=[
+ {zh:'台中國家歌劇院',en:'National Taichung Theater',tz:'伊東豊雄設計的曲牆洞穴',te:"Toyo Ito's curving “sound caves”",x:130,y:200,s:0},
+ {zh:'秋紅谷',en:'Maple Garden',tz:'下沉在城市裡的一池湖',te:'A sunken lake in the middle of the city',x:-230,y:70,s:120},
+ {zh:'七期百貨商圈',en:'Xitun Shopping District',tz:'百貨林立的新天際線',te:'Department stores and a brand-new skyline',x:410,y:70,s:520},
+ {zh:'臺中市政府',en:'Taichung City Hall',tz:'府會園道，綠意一路往南延伸',te:'A civic green axis stretching south',x:765,y:110,s:880},
+ {zh:'捷運市政府站',en:'MRT City Hall Station',tz:'綠線列車從頭頂滑過',te:'Green Line trains glide overhead',x:930,y:-56,s:1065},
+ {zh:'台灣大道',en:'Taiwan Boulevard',tz:'公車專用道串起東西台中',te:'Bus lanes stitching west and east Taichung',x:1180,y:-26,s:1330},
+ {zh:'國立自然科學博物館',en:'National Museum of Natural Science',tz:'恐龍、太空劇場與玻璃溫室',te:'Dinosaurs, a space theater and a glass rainforest',x:1405,y:-205,s:1520},
+ {zh:'草悟道',en:'Calligraphy Greenway',tz:'像一筆草書的城市綠帶',te:'A green ribbon written like cursive',x:1560,y:-46,s:1690},
+ {zh:'勤美誠品綠園道',en:'Parklane by CMP',tz:'植生牆後的文青日常',te:'Living green walls and bookish afternoons',x:1690,y:72,s:1810},
+ {zh:'審計新村',en:'Shenji New Village',tz:'老宿舍變身文創聚落',te:'Old government dorms reborn as indie shops',x:1690,y:268,s:1895},
+ {zh:'柳川',en:'Liuchuan Waterfront',tz:'柳樹垂岸的水岸步道',te:'A willow-lined canal promenade',x:2250,y:-110,s:2390},
+ {zh:'中區老街屋',en:'Old Central District',tz:'騎樓、老招牌與巷弄小吃',te:'Arcades, vintage signs and street snacks',x:2580,y:-96,s:2720},
+ {zh:'台中第二市場',en:'Taichung Second Market',tz:'六角樓下的百年早餐',te:'Century-old breakfasts by the hexagon tower',x:2826,y:96,s:2995},
+ {zh:'台中公園',en:'Taichung Park',tz:'湖心亭倒映的老台中',te:'The twin lake pavilion of old Taichung',x:2985,y:-190,s:L}];
+STOPS.forEach((s,k)=>s.c=ACC[k%ACC.length]);
+// 行进速度：经过景点时放慢，起止缓入缓出；预先积分出 时间↔路程 表（纯函数）
+const vel=s=>{let b=1;STOPS.forEach(st=>{b-=.55*Math.exp(-(((s-st.s-30)/100)**2))});return Math.max(.3,b)*(.2+.8*smooth(s/240))*(.2+.8*smooth((L-s)/240))};
+const TS=[0];for(let s=1;s<=L;s++)TS.push(TS[s-1]+1/vel(s-.5));
+const T0=.7,T1=DUR-2.4;
+const tOfS=s=>T0+TS[Math.max(0,Math.min(L,Math.round(s)))]/TS[L]*(T1-T0);
+function sAt(t){if(t<=T0)return 0;if(t>=T1)return L;const g=(t-T0)/(T1-T0)*TS[L];let lo=0,hi=L;
+ while(hi-lo>1){const m=(lo+hi)>>1;TS[m]<g?lo=m:hi=m}return lo+(g-TS[lo])/(TS[hi]-TS[lo])}
+STOPS.forEach((s,k)=>s.tr=k==0?-9:tOfS(s.s));
+window.META={reveals:STOPS.map(s=>+s.tr.toFixed(3)),dur:DUR};
+
+// ---- 静态世界：只生成一次 ----
+const R=rng(21);
+const xe=[[X0,0],...XS,[X1,0]],ye=[[Y0,0],...YS,[Y1,0]],blocks=[];
+for(let i=0;i<xe.length-1;i++)for(let j=0;j<ye.length-1;j++){const x=xe[i][0]+xe[i][1]+2,x2=xe[i+1][0]-xe[i+1][1]-2,y=ye[j][0]+ye[j][1]+2,y2=ye[j+1][0]-ye[j+1][1]-2;
+ if(x2-x>8&&y2-y>8)blocks.push({x,y,w:x2-x,h:y2-y})}
+const style=x=>x<1100?{wMin:26,wMax:56,hMin:26,hMax:50,gap:7,ht:[6,16],cols:TOWER}:x<2150?{wMin:14,wMax:30,hMin:18,hMax:32,gap:4,ht:[3,7],cols:HOUSE}
+ :{wMin:10,wMax:18,hMin:18,hMax:28,gap:3,ht:[2,5],cols:HOUSE,sign:true};
+function subdiv(x0,y0,x1,y1,st,out){let y=y0;
+ while(y<y1-st.hMin*.6){let h=st.hMin+R()*(st.hMax-st.hMin);if(y+h>y1||y1-(y+h)<st.hMin*.7)h=y1-y;let x=x0;
+  while(x<x1-st.wMin*.6){let w=st.wMin+R()*(st.wMax-st.wMin);if(x+w>x1||x1-(x+w)<st.wMin*.7)w=x1-x;out.push({x:x+st.gap/2,y:y+st.gap/2,w:w-st.gap,h:h-st.gap});x+=w}
+  y+=h}}
+const bldgs=[],gardens=[],trees=[];
+const TC=[P.green,P.green,'#6CC08B','#6CC08B',P.pink,P.rape];
+blocks.forEach(b=>{const st=style(b.x+b.w/2),tmp=[];subdiv(b.x,b.y,b.x+b.w,b.y+b.h,st,tmp);
+ tmp.forEach(o=>{if(o.w<5||o.h<5||RES.some(r=>hit(o,{x:r.x-3,y:r.y-3,w:r.w+6,h:r.h+6})))return;
+  if(R()<.07){gardens.push(o);trees.push({x:o.x+o.w/2,y:o.y+o.h/2,r:Math.min(9,4+Math.min(o.w,o.h)*.3),c:pick(R,TC)});return}
+  bldgs.push({...o,c:pick(R,st.cols),tex:R()*3|0,ht:st.ht[0]+R()*(st.ht[1]-st.ht[0]),ac:R()*4|0,sign:st.sign&&R()<.55?pick(R,[P.red,P.rape,P.sky,P.coral,P.green,P.pink]):null,se:R()<.5})})});
+// 行道树：台灣大道两侧人行道
+const nearStreet=x=>XS.some(([sx,hw])=>Math.abs(x-sx)<hw+7)||(x>GREEN.x-6&&x<GREEN.x2+6)||(x>RIVER.x-6&&x<RIVER.x2+6);
+for(let x=X0+10;x<X1;x+=19+R()*5)if(!nearStreet(x))for(const sy of[-25.5,25.5])trees.push({x,y:sy+(R()-.5),r:5+R()*2,c:R()<.85?P.green:'#6CC08B'});
+// 地标周边的树
+const ring=(cx,cy,rx,ry,n,cols,rr=[5,8])=>{for(let k=0;k<n;k++){const a=k/n*Math.PI*2+R()*.3;trees.push({x:cx+Math.cos(a)*rx*(.92+R()*.1),y:cy+Math.sin(a)*ry*(.92+R()*.1),r:rr[0]+R()*(rr[1]-rr[0]),c:pick(R,cols)})}};
+ring(-228,94,92,52,18,[P.red,P.coral,P.red,P.green,'#E86A4A']);                         // 秋紅谷红枫
+ring(130,240,92,82,16,[P.green,'#6CC08B',P.pink]);
+for(let k=0;k<16;k++)trees.push({x:LM.axis.x+8+(k%2)*(LM.axis.w-16),y:LM.axis.y+12+(k>>1)*50,r:7,c:P.green});
+for(let k=0;k<12;k++)trees.push({x:1330+R()*180,y:-130+R()*85,r:6+R()*5,c:pick(R,[P.green,'#6CC08B',P.green])});
+for(let y=Y0+10;y<Y1;y+=22+R()*10){if(Math.abs(y)<BH+8||YS.some(([sy,hw])=>Math.abs(y-sy)<hw+6))continue;
+ trees.push({x:GREEN.x+6+R()*4,y,r:6+R()*3,c:pick(R,[P.green,'#6CC08B',P.pink])});trees.push({x:GREEN.x2-6-R()*4,y:y+9,r:6+R()*3,c:pick(R,[P.green,'#6CC08B',P.green])});
+ trees.push({x:RIVER.x+5,y:y+4,r:6+R()*2,c:'#8FD3A6'});trees.push({x:RIVER.x2-5,y:y+13,r:6+R()*2,c:'#8FD3A6'})}  // 柳川垂柳
+ring(2985,-235,118,135,26,[P.green,'#6CC08B',P.green,P.pink],[7,11]);
+trees.sort((a,b)=>a.y-b.y);
+
+// ---- 绘制辅助 ----
+function bShadow(g,o){g.fillStyle='rgba(43,43,58,.13)';g.fillRect(o.x+o.ht*.45,o.y+o.ht*.6,o.w,o.h)}   // 投影长度 ∝ 楼高
+function bTop(g,o){g.fillStyle=o.c;g.fillRect(o.x,o.y,o.w,o.h);tex(g,o.x,o.y,o.w,o.h,o.tex);
+ if(o.ht>6){g.strokeStyle='rgba(255,255,255,.6)';g.lineWidth=1.4;g.strokeRect(o.x+3,o.y+3,o.w-6,o.h-6);g.fillStyle='rgba(43,43,58,.16)';for(let k=0;k<o.ac;k++)g.fillRect(o.x+6+k*7,o.y+6,4,4)}
+ else{const hz=o.w>=o.h;g.fillStyle='rgba(255,255,255,.2)';hz?g.fillRect(o.x,o.y,o.w,o.h/2):g.fillRect(o.x,o.y,o.w/2,o.h);
+  g.strokeStyle='rgba(43,43,58,.15)';g.lineWidth=1;g.beginPath();if(hz){g.moveTo(o.x+1,o.y+o.h/2);g.lineTo(o.x+o.w-1,o.y+o.h/2)}else{g.moveTo(o.x+o.w/2,o.y+1);g.lineTo(o.x+o.w/2,o.y+o.h-1)}g.stroke()}
+ if(o.sign){g.fillStyle=o.sign;o.se?g.fillRect(o.x,o.y+o.h-2.6,o.w,2.6):g.fillRect(o.x,o.y,o.w,2.6)}}                 // 老街屋招牌
+function blob(g,parts,c){g.fillStyle=c;g.beginPath();parts.forEach(([x,y,r])=>{g.moveTo(x+r,y);g.arc(x,y,r,0,7)});g.fill()}
+function hexPath(g,x,y,r){g.beginPath();for(let k=0;k<6;k++){const a=Math.PI/6+k*Math.PI/3;k?g.lineTo(x+r*Math.cos(a),y+r*Math.sin(a)):g.moveTo(x+r*Math.cos(a),y+r*Math.sin(a))}g.closePath()}
+const MAPLE_LAKE=[[-250,96,30],[-215,90,32],[-188,102,20],[-270,108,18],[-232,110,24]],PARK_POND=[[2960,-230,46],[3010,-240,42],[2985,-200,34],[2945,-268,26],[3030,-205,24]];
+
+// ---- 把静态世界画到 2x 离屏画布 ----
+const SC=2,stat=document.createElement('canvas');stat.width=(X1-X0)*SC;stat.height=(Y1-Y0)*SC;
+{const g=stat.getContext('2d');g.setTransform(SC,0,0,SC,-X0*SC,-Y0*SC);
+ g.fillStyle=P.road;g.fillRect(X0,Y0,X1-X0,Y1-Y0);
+ blocks.forEach(b=>{g.fillStyle=P.ground;g.fillRect(b.x,b.y,b.w,b.h)});
+ // 台灣大道断面
+ g.fillStyle=P.walk;g.fillRect(X0,-BH,X1-X0,5);g.fillRect(X0,BH-5,X1-X0,5);tex(g,X0,-BH,X1-X0,5,1,.5);tex(g,X0,BH-5,X1-X0,5,1,.5);
+ g.fillStyle=P.bus;g.fillRect(X0,-10,X1-X0,6);g.fillRect(X0,4,X1-X0,6);
+ g.fillStyle=P.lawn;g.fillRect(X0,-4,X1-X0,8);tex(g,X0,-4,X1-X0,8,0,.6);
+ g.fillStyle='rgba(255,255,255,.9)';for(let x=X0;x<X1;x+=16)for(const y of[-16.5,16.5])g.fillRect(x,y-.6,8,1.2);
+ XS.forEach(([sx,hw])=>{g.fillStyle=P.road;g.fillRect(sx-hw,-BH,hw*2,BH*2);g.fillStyle='rgba(255,255,255,.95)';              // 路口斑马线
+  for(const ex of[sx-hw-5,sx+hw+1])for(let y=-22;y<22;y+=4)g.fillRect(ex,y,4,2.2)});
+ // 一般建筑：先画全部投影再画屋顶
+ bldgs.forEach(o=>bShadow(g,o));bldgs.forEach(o=>bTop(g,o));
+ gardens.forEach(o=>{g.fillStyle=P.lawn;g.fillRect(o.x,o.y,o.w,o.h);tex(g,o.x,o.y,o.w,o.h,0,.5)});
+ const lawn=(r,c=P.lawn)=>{g.fillStyle=c;g.fillRect(r.x,r.y,r.w,r.h);tex(g,r.x,r.y,r.w,r.h,0,.55)};
+ // 1 台中國家歌劇院：白色曲面量体 + 屋顶花园 + 洞穴开口
+ {lawn(LM.theater);g.fillStyle=P.walk;g.fillRect(30,175,26,36);tex(g,30,175,26,36,1,.5);
+  g.fillStyle='rgba(43,43,58,.16)';g.beginPath();g.roundRect(70,186,124,92,28);g.fill();
+  g.fillStyle='#F9F7F2';g.beginPath();g.roundRect(60,176,124,92,28);g.fill();g.strokeStyle='#E4DFEA';g.lineWidth=2;g.stroke();
+  g.fillStyle='#B9E3C6';g.beginPath();g.roundRect(72,188,100,68,20);g.fill();tex(g,72,188,100,68,0,.55);
+  for(const [x,y,rx,ry] of[[92,206,12,9],[128,200,15,8],[158,214,10,12],[104,238,16,9],[146,242,13,8]]){g.fillStyle='#FFFFFF';g.beginPath();g.ellipse(x,y,rx+3,ry+3,0,0,7);g.fill();
+   g.fillStyle='#D8D4E3';g.beginPath();g.ellipse(x,y,rx,ry,0,0,7);g.fill();g.fillStyle='rgba(43,43,58,.12)';g.beginPath();g.ellipse(x+2,y+2,rx*.7,ry*.6,0,0,7);g.fill()}}
+ // 2 秋紅谷：层层下沉的草阶 + 湖 + 木桥
+ {lawn(LM.maple);g.fillStyle='#B2DDBF';g.beginPath();g.roundRect(-318,44,182,98,40);g.fill();g.fillStyle='#A3D6B2';g.beginPath();g.roundRect(-305,56,156,76,32);g.fill();
+  blob(g,MAPLE_LAKE,P.water);g.save();g.beginPath();MAPLE_LAKE.forEach(([x,y,r])=>{g.moveTo(x+r,y);g.arc(x,y,r,0,7)});g.clip();tex(g,-300,50,140,90,0,.28);g.restore();
+  g.strokeStyle='#D9A57A';g.lineWidth=5;g.beginPath();g.moveTo(-262,72);g.quadraticCurveTo(-228,96,-200,128);g.stroke();g.strokeStyle='rgba(255,255,255,.6)';g.lineWidth=1;g.stroke()}
+ // 3 七期百货：两栋大量体 + 天窗 + 临街招牌带，背后高楼由一般建筑生成
+ for(const [x,c,sc] of[[260,'#F7D9D9',P.pink],[420,'#DCE7F5',P.rape]]){shadowRect(g,x,42,140,104,9,12);g.fillStyle=c;g.fillRect(x,42,140,104);tex(g,x,42,140,104,2,.4);
+  g.fillStyle=sc;g.fillRect(x,42,140,7);g.strokeStyle='rgba(255,255,255,.85)';g.lineWidth=1.5;for(let k=0;k<4;k++)g.strokeRect(x+18+k*28,72,20,52);
+  g.fillStyle='rgba(43,43,58,.15)';g.fillRect(x+110,128,18,10)}
+ // 4 臺中市政府：双塔 + 玻璃中庭 + 广场 + 往南的府會園道
+ {const h=LM.hall;g.fillStyle=P.walk;g.fillRect(h.x,h.y,h.w,h.h);tex(g,h.x,h.y,h.w,h.h,1,.45);lawn({x:h.x+16,y:h.y+120,w:h.w-32,h:70});
+  lawn(LM.axis);g.fillStyle=P.walk;g.fillRect(LM.axis.x+36,LM.axis.y,14,LM.axis.h);
+  for(const x of[650,810]){shadowRect(g,x,48,62,62,10,13);g.fillStyle='#CFE3F7';g.fillRect(x,48,62,62);tex(g,x,48,62,62,1,.5);g.strokeStyle='#FFFFFF';g.lineWidth=2;g.strokeRect(x+6,54,50,50)}
+  shadowRect(g,712,58,98,42,5,7);g.fillStyle='#A9D8F5';g.fillRect(712,58,98,42);g.strokeStyle='rgba(255,255,255,.85)';g.lineWidth=1.2;
+  for(let x=712;x<810;x+=8){g.beginPath();g.moveTo(x,58);g.lineTo(x,100);g.stroke()}circ(g,765,195,13,P.water);circ(g,765,195,9,'#5B83F0')}
+ // 6 科博馆：主馆 + 太空剧场圆顶 + 玻璃金字塔温室 + 恐龙
+ {lawn(LM.museum);g.fillStyle=P.walk;g.fillRect(1340,-150,160,10);
+  shadowRect(g,1335,-215,120,58,7,9);g.fillStyle='#F3E3C8';g.fillRect(1335,-215,120,58);tex(g,1335,-215,120,58,2,.45);g.fillStyle='#E2B07E';g.fillRect(1335,-215,120,6);
+  circ(g,1356,-262,24,'rgba(43,43,58,.15)');circ(g,1352,-266,22,'#FFFFFF');circ(g,1352,-266,15,'#E9E6EF');circ(g,1352,-266,5,'#FFFFFF');
+  const gx=1478,gy=-250,gs=54;shadowRect(g,gx-gs/2,gy-gs/2,gs,gs,8,10);g.fillStyle='#A9D8F5';g.fillRect(gx-gs/2,gy-gs/2,gs,gs);tex(g,gx-gs/2,gy-gs/2,gs,gs,0,.5);
+  g.fillStyle='rgba(255,255,255,.35)';g.beginPath();g.moveTo(gx-gs/2,gy-gs/2);g.lineTo(gx+gs/2,gy-gs/2);g.lineTo(gx,gy);g.fill();
+  g.strokeStyle='#FFFFFF';g.lineWidth=1.6;g.beginPath();g.moveTo(gx-gs/2,gy-gs/2);g.lineTo(gx+gs/2,gy+gs/2);g.moveTo(gx+gs/2,gy-gs/2);g.lineTo(gx-gs/2,gy+gs/2);g.stroke();
+  g.fillStyle='rgba(43,43,58,.15)';g.beginPath();g.ellipse(1392,-98,16,7,0,0,7);g.fill();g.fillStyle='#2E8B57';                                 // 恐龙
+  g.beginPath();g.ellipse(1388,-102,15,6.5,0,0,7);g.fill();g.beginPath();g.moveTo(1376,-104);g.lineTo(1352,-112);g.lineTo(1376,-99);g.fill();
+  g.lineWidth=3.2;g.strokeStyle='#2E8B57';g.beginPath();g.moveTo(1400,-104);g.quadraticCurveTo(1412,-116,1410,-128);g.stroke();circ(g,1410,-130,3.6,'#2E8B57')}
+ // 7 草悟道：贯穿南北的绿带 + 草书般蜿蜒步道
+ {lawn(LM.green);g.strokeStyle=P.walk;g.lineWidth=7;g.lineCap='round';g.beginPath();for(let y=Y0;y<=Y1;y+=6){const x=1560+12*Math.sin(y/42);y==Y0?g.moveTo(x,y):g.lineTo(x,y)}g.stroke();
+  for(let y=Y0+30;y<Y1;y+=95){if(Math.abs(y)<60)continue;const c=pick(R,[P.coral,P.rape,P.lilac,P.sky]);shadowRect(g,1546+R()*20,y,8,8,2);g.fillStyle=c;g.fillRect(1546+R()*20,y,8,8)}}
+ // 8 勤美：植生墙量体 + 前广场
+ {g.fillStyle=P.walk;g.fillRect(LM.cmp.x,LM.cmp.y,LM.cmp.w,LM.cmp.h);tex(g,LM.cmp.x,LM.cmp.y,LM.cmp.w,LM.cmp.h,1,.45);
+  shadowRect(g,1612,44,96,70,8,10);g.fillStyle='#5FB883';g.fillRect(1612,44,96,70);tex(g,1612,44,96,70,1,.3);g.fillStyle='#8ED1A6';g.fillRect(1620,52,80,54);tex(g,1620,52,80,54,0,.5)}
+ // 9 審計新村：灰瓦小宿舍
+ {g.fillStyle=P.cream;g.fillRect(LM.shenji.x,LM.shenji.y,LM.shenji.w,LM.shenji.h);tex(g,LM.shenji.x,LM.shenji.y,LM.shenji.w,LM.shenji.h,2,.5);
+  for(let k=0;k<8;k++){const x=1612+(k%4)*40,y=246+(k>>2)*56;bShadow(g,{x,y,w:30,h:38,ht:3});bTop(g,{x,y,w:30,h:38,ht:3,c:k%3?'#A9B4C9':'#C9B8A6',tex:k%3})}}
+ // 10 柳川：步道 + 水道 + 桥
+ {lawn(LM.river,'#CDEBD5');g.fillStyle=P.walk;g.fillRect(RIVER.x+9,Y0,3,Y1-Y0);g.fillRect(RIVER.x2-12,Y0,3,Y1-Y0);g.fillStyle=P.water;g.fillRect(RIVER.c-10,Y0,20,Y1-Y0);tex(g,RIVER.c-10,Y0,20,Y1-Y0,0,.28);
+  [...YS].forEach(([sy,hw])=>{g.fillStyle='rgba(43,43,58,.15)';g.fillRect(RIVER.x+2,sy-hw+3,RIVER.x2-RIVER.x,hw*2);g.fillStyle=P.road;g.fillRect(RIVER.x,sy-hw,RIVER.x2-RIVER.x,hw*2);
+   g.fillStyle='#FFFFFF';g.fillRect(RIVER.c-12,sy-hw,24,1.4);g.fillRect(RIVER.c-12,sy+hw-1.4,24,1.4)});
+  g.fillStyle=P.bus;g.fillRect(RIVER.x,-10,RIVER.x2-RIVER.x,6);g.fillRect(RIVER.x,4,RIVER.x2-RIVER.x,6);g.fillStyle=P.lawn;g.fillRect(RIVER.x,-4,RIVER.x2-RIVER.x,8)}
+ // 13 第二市場：六角樓 + 三翼市场棚 + 摊位
+ {const m=LM.market,cx=2826,cy=132;g.fillStyle=P.cream;g.fillRect(m.x,m.y,m.w,m.h);tex(g,m.x,m.y,m.w,m.h,2,.5);
+  for(const a of[-Math.PI/2,Math.PI/6,Math.PI*5/6]){g.save();g.translate(cx,cy);g.rotate(a);g.fillStyle='rgba(43,43,58,.15)';g.fillRect(6,-10,72,22);
+   g.fillStyle=a<0?'#C9A7F0':'#A9D8F5';g.fillRect(2,-12,72,24);tex(g,2,-12,72,24,1,.4);g.fillStyle='rgba(43,43,58,.15)';g.fillRect(2,-.6,72,1.2);g.restore()}
+  hexPath(g,cx+3,cy+4,22);g.fillStyle='rgba(43,43,58,.18)';g.fill();hexPath(g,cx,cy,22);g.fillStyle='#E25B3F';g.fill();hexPath(g,cx,cy,15);g.fillStyle=P.coral;g.fill();
+  hexPath(g,cx,cy,8);g.fillStyle='#F9A777';g.fill();circ(g,cx,cy,3,P.gold);
+  for(let k=0;k<10;k++){const x=m.x+6+k*12,c=pick(R,[P.coral,P.rape,P.pink,P.sky,P.mint]);g.fillStyle=c;g.fillRect(x,m.y+m.h-14,9,7);g.fillStyle='rgba(255,255,255,.5)';g.fillRect(x+3,m.y+m.h-14,1.5,7)}}
+ // 14 台中公園：湖 + 湖心亭（双亭）+ 栈桥
+ {lawn(LM.park);g.strokeStyle=P.walk;g.lineWidth=5;g.beginPath();g.ellipse(2985,-235,108,122,0,0,7);g.stroke();
+  blob(g,PARK_POND,P.water);g.save();g.beginPath();PARK_POND.forEach(([x,y,r])=>{g.moveTo(x+r,y);g.arc(x,y,r,0,7)});g.clip();tex(g,2900,-320,170,170,0,.28);g.restore();
+  g.fillStyle='#D9A57A';g.fillRect(2982,-222,6,40);
+  for(const x of[2970,2998]){shadowRect(g,x-9,-240,18,18,3,4);g.fillStyle='#FFF4E0';g.fillRect(x-9,-240,18,18);g.strokeStyle='#C9603F';g.lineWidth=1.6;
+   g.beginPath();g.moveTo(x-9,-240);g.lineTo(x+9,-222);g.moveTo(x+9,-240);g.lineTo(x-9,-222);g.stroke();circ(g,x,-231,2.4,'#C9603F')}}
+ // 5 捷运绿线高架（文心路上方）+ 车站
+ {g.fillStyle='rgba(43,43,58,.16)';g.fillRect(MRTX-8+8,Y0,16,Y1-Y0);g.fillStyle='#DAD6E2';g.fillRect(MRTX-8,Y0,16,Y1-Y0);
+  g.fillStyle='#FFFFFF';g.fillRect(MRTX-5,Y0,1.2,Y1-Y0);g.fillRect(MRTX+3.8,Y0,1.2,Y1-Y0);
+  const s=LM.mrt;shadowRect(g,s.x,s.y,s.w,s.h,8,10);g.fillStyle='#E3F4EA';g.fillRect(s.x,s.y,s.w,s.h);tex(g,s.x,s.y,s.w,s.h,1,.5);g.fillStyle=P.green;g.fillRect(s.x,s.y+s.h/2-3,s.w,6)}
+}
+// 静态画布按视野裁切绘制（只取镜头附近）
+function drawStatic(cx,cy,vr){const x=Math.max(X0,cx-vr),y=Math.max(Y0,cy-vr),x2=Math.min(X1,cx+vr),y2=Math.min(Y1,cy+vr);
+ ctx.drawImage(stat,(x-X0)*SC,(y-Y0)*SC,(x2-x)*SC,(y2-y)*SC,x,y,x2-x,y2-y)}
+
+// ---- 小动静的数据 ----
+const RD=rng(9),SPAN=X1-X0;
+const CARC=['#FFFFFF','#FFFFFF','#BDB6C9','#A9D8F5','#FFE08A','#F7C6C7','#2B2B3A','#E5484D'];
+const cars=[...Array(80)].map(()=>{const d=RD()<.5?1:-1;return{x0:RD()*SPAN,d,y:d*(RD()<.5?13:18),v:50+RD()*40,c:pick(RD,CARC),L:11+RD()*3}});
+const buses=[...Array(7)].map((_,k)=>{const d=k%2?1:-1;return{x0:RD()*SPAN,d,y:d*7,v:42+RD()*10,c:pick(RD,[P.green,'#3B8FD9',P.coral])}});
+const scooters=[];for(let g=0;g<26;g++){const d=RD()<.5?1:-1,x0=RD()*SPAN,v=38+RD()*20;for(let k=0;k<3+RD()*6;k++)scooters.push({x0:x0+RD()*30,d,y:d*(20.5+RD()*1.6),v,c:pick(RD,[P.coral,P.sky,P.rape,P.pink,'#FFFFFF',P.ink,P.mint])})}
+const xcars=XS.filter(([x,hw])=>hw>=5&&x!=MRTX).flatMap(([x])=>[...Array(2)].map(()=>{const d=RD()<.5?1:-1;return{x:x+d*2.5,y0:RD()*1280,d,v:30+RD()*30,c:pick(RD,CARC)}}));
+const walkers=[...Array(30)].map(()=>({y0:RD()*1280,d:RD()<.5?1:-1,v:5+RD()*7,o:-3+RD()*6,c:pick(RD,[P.coral,P.pink,P.sky,P.lilac,P.rape,P.ink])}));
+const rwalk=[...Array(14)].map(()=>({y0:RD()*1280,d:RD()<.5?1:-1,v:5+RD()*6,x:RD()<.5?RIVER.x+10.5:RIVER.x2-10.5,c:pick(RD,[P.coral,P.pink,P.lilac,P.ink])}));
+const crowds=[[130,160,40,8,14],[2826,195,50,14,16],[2826,60,40,10,10],[1690,140,60,8,10],[1690,300,70,40,10],[765,180,60,20,10]].flatMap(([x,y,rx,ry,n])=>
+ [...Array(n)].map(()=>({x,y,rx:RD()*rx,ry:RD()*ry,f:.15+RD()*.3,ph:RD()*7,c:pick(RD,[P.coral,P.pink,P.sky,P.lilac,P.rape,P.ink,P.green])})));
+const flows=[...Array(70)].map(()=>({y0:RD()*1280,o:-6+RD()*12,v:14+RD()*6}));
+const boats=[...Array(3)].map((_,k)=>({ph:k*2.1,rx:30+RD()*14,ry:18+RD()*10,c:[P.coral,P.rape,P.pink][k]}));
+const umbs=[[1640,128,P.coral],[1660,136,P.rape],[1700,130,P.pink],[1735,134,P.sky],[2790,212,P.rape],[2860,212,P.coral]];
+
+// ---- 绘制辅助（动态） ----
+function vehicle(x,y,ang,Lh,Wd,body,roof){ctx.save();ctx.translate(x,y);ctx.rotate(ang);
+ ctx.fillStyle='rgba(43,43,58,.2)';ctx.fillRect(-Lh/2+2,-Wd/2+2,Lh,Wd);ctx.fillStyle=body;ctx.fillRect(-Lh/2,-Wd/2,Lh,Wd);
+ ctx.fillStyle=roof;ctx.fillRect(-Lh/2+2,-Wd/2+1.5,Lh-6,Wd-3);ctx.fillStyle='rgba(43,43,58,.6)';ctx.fillRect(Lh/2-3.2,-Wd/2+1,1.6,Wd-2);ctx.restore()}
+function dot(x,y,r,c){ctx.fillStyle='rgba(43,43,58,.18)';ctx.beginPath();ctx.arc(x+1.2,y+1.4,r,0,7);ctx.fill();circ(ctx,x,y,r,c)}
+function umbrella(x,y,c,rot){circ(ctx,x+2,y+3,7,'rgba(43,43,58,.16)');circ(ctx,x,y,7,c);ctx.fillStyle='rgba(255,255,255,.55)';
+ for(let w=0;w<8;w+=2){ctx.beginPath();ctx.moveTo(x,y);ctx.arc(x,y,7,w*Math.PI/4+rot,(w+1)*Math.PI/4+rot);ctx.fill()}circ(ctx,x,y,1.4,'#FFFFFF')}
+function steam(x,y,t,ph){ctx.lineWidth=1.4;for(let w=0;w<2;w++){const p=(t*.55+w*.5+ph)%1,xx=x+Math.sin(p*6+w*2)*2,yy=y-4-p*18;
+ ctx.strokeStyle=`rgba(138,135,151,${.75*Math.sin(Math.PI*p)})`;ctx.beginPath();ctx.moveTo(xx,yy);ctx.quadraticCurveTo(xx+3,yy-3,xx,yy-6);ctx.quadraticCurveTo(xx-3,yy-9,xx,yy-12);ctx.stroke()}}
+const backOut=x=>{x=Math.max(0,Math.min(1,x));return 1+2.7*Math.pow(x-1,3)+1.7*Math.pow(x-1,2)};
+
+// 镜头：沿路线看向前方，对一段路程取平均让转弯平滑
+function camAt(s){let x=0,y=0,n=0;for(let d=-60;d<=220;d+=20){const p=ptAt(s+d);x+=p[0];y+=p[1];n++}return[x/n,y/n*.65+18-120*smooth((s-2550)/450)]}  // 终点前镜头上抬，把台中公園收进画面
+
+function world(t,s,cam,vr){const [cx,cy]=cam,inV=(x,y,m=40)=>Math.abs(x-cx)<vr+m&&Math.abs(y-cy)<vr+m;
+ drawStatic(cx,cy,vr+40);
+ // 水：柳川水流、秋紅谷与公园湖面涟漪
+ ctx.strokeStyle='rgba(255,255,255,.8)';ctx.lineWidth=1.5;
+ if(inV(RIVER.c,cy,200))flows.forEach(f=>{const y=Y0+mod(f.y0+t*f.v,1280);if(YS.some(([sy,hw])=>Math.abs(y-sy)<hw+5))return;const x=RIVER.c+f.o;
+  ctx.beginPath();ctx.moveTo(x,y-4);ctx.quadraticCurveTo(x+2.4,y,x,y+4);ctx.stroke()});
+ for(const [x,y,per,off] of[[-240,92,2.4,0],[-205,108,2.4,1.2],[2960,-250,2.8,.4],[3010,-215,2.8,1.8],[765,195,1.6,0]]){if(!inV(x,y))continue;const p=((t+off)%per)/per;
+  ctx.strokeStyle=`rgba(255,255,255,${.9*(1-p)})`;ctx.lineWidth=1.6;ctx.beginPath();ctx.arc(x,y,3+p*16,0,7);ctx.stroke()}
+ if(inV(2985,-235))boats.forEach(b=>{const a=t*.35+b.ph,x=2985+Math.cos(a)*b.rx,y=-232+Math.sin(a)*b.ry;
+  ctx.save();ctx.translate(x,y);ctx.rotate(a+Math.PI/2);ctx.fillStyle='rgba(255,255,255,.6)';ctx.fillRect(-14,-.6,8,1.2);
+  ctx.fillStyle='rgba(43,43,58,.2)';ctx.beginPath();ctx.ellipse(1.5,1.5,6,3,0,0,7);ctx.fill();ctx.fillStyle=b.c;ctx.beginPath();ctx.ellipse(0,0,6,3,0,0,7);ctx.fill();
+  ctx.strokeStyle=P.ink;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,-6+Math.sin(t*4+b.ph)*1.5);ctx.lineTo(0,6-Math.sin(t*4+b.ph)*1.5);ctx.stroke();ctx.restore()});
+ // 台灣大道车流：汽车 / 公车专用道 / 机车群（右行：东向走南侧）
+ const onX=(o)=>X0+mod(o.x0+o.d*o.v*t,SPAN);
+ scooters.forEach(o=>{const x=onX(o);if(!inV(x,o.y))return;ctx.fillStyle='rgba(43,43,58,.2)';ctx.fillRect(x-1,o.y,5,2.4);ctx.fillStyle=o.c;ctx.fillRect(x-2.5,o.y-1.2,5,2.4);circ(ctx,x+o.d*.5,o.y,1,P.ink)});
+ cars.forEach(o=>{const x=onX(o);if(inV(x,o.y))vehicle(x,o.y,o.d>0?0:Math.PI,o.L,7,o.c,'rgba(43,43,58,.12)')});
+ buses.forEach(o=>{const x=onX(o);if(!inV(x,o.y))return;vehicle(x,o.y,o.d>0?0:Math.PI,24,6.5,'#FFFFFF','#F4F2F8');ctx.fillStyle=o.c;ctx.fillRect(x-12,o.y-.9,24,1.8)});
+ xcars.forEach(o=>{const y=Y0+mod(o.y0+o.d*o.v*t,1280);if(Math.abs(y)<BH+4||!inV(o.x,y))return;vehicle(o.x,y,o.d>0?Math.PI/2:-Math.PI/2,11,6.5,o.c,'rgba(43,43,58,.12)')});
+ // 行人
+ walkers.forEach(o=>{const y=Y0+mod(o.y0+o.d*o.v*t,1280),x=1560+12*Math.sin(y/42)+o.o;if(Math.abs(y)>BH&&inV(x,y))dot(x,y,2.2,o.c)});
+ rwalk.forEach(o=>{const y=Y0+mod(o.y0+o.d*o.v*t,1280);if(Math.abs(y)>BH&&inV(o.x,y))dot(o.x,y,2.2,o.c)});
+ crowds.forEach(o=>{const x=o.x+o.rx*Math.sin(t*o.f+o.ph),y=o.y+o.ry*Math.cos(t*o.f*1.3+o.ph);if(inV(x,y))dot(x,y,2.2,o.c)});
+ // 树：呼吸式缩放
+ trees.forEach(tr=>{if(!inV(tr.x,tr.y))return;const k=1+.04*Math.sin(t*2+tr.x*.7+tr.y);circ(ctx,tr.x+3,tr.y+4,tr.r*k,'rgba(43,43,58,.15)');
+  circ(ctx,tr.x,tr.y,tr.r*k,tr.c);circ(ctx,tr.x-tr.r*.3,tr.y-tr.r*.3,tr.r*.45*k,'rgba(255,255,255,.22)')});
+ // 捷运绿线列车（高架在最上层）
+ for(let k=0;k<2;k++){const y=Y0-80+mod(t*95+k*720,1440),x=MRTX;if(!inV(x,y,60))continue;
+  ctx.fillStyle='rgba(43,43,58,.2)';ctx.fillRect(x-5+9,y-30+11,10,60);ctx.fillStyle='#FFFFFF';ctx.beginPath();ctx.roundRect(x-5,y-30,10,60,4);ctx.fill();
+  ctx.fillStyle=P.green;ctx.fillRect(x-5,y-30,2.2,60);ctx.fillStyle='#A9D8F5';for(let j=0;j<4;j++)ctx.fillRect(x-1,y-26+j*15,4,9)}
+ // 遮阳伞、市场热气、審計新村串灯、市府喷泉
+ umbs.forEach(([x,y,c],k)=>{if(inV(x,y))umbrella(x,y,c,k)});
+ for(const [x,y,ph] of[[2786,214,0],[2832,216,.3],[2872,214,.6],[2790,60,.15],[1655,124,.45]])if(inV(x,y))steam(x,y,t,ph);
+ if(inV(1690,300))for(let k=0;k<26;k++){const x=1612+k*6.2,y=286+5*Math.sin(k*.9),a=.45+.55*Math.max(0,Math.sin(t*3+k*1.7));circ(ctx,x,y,1.8,`rgba(249,201,60,${a})`)}
+ if(inV(765,195))for(let j=0;j<8;j++){const p=(t*1.3+j/8)%1,an=j*.8;circ(ctx,765+Math.cos(an)*p*10,195+Math.sin(an)*p*10,1.3,`rgba(255,255,255,${.9*(1-p)})`)}
+ // 路线：已走过的实线 + 未走的虚线 + 定位针
+ const pts=[[...ROUTE[0]]];{const h=ptAt(s);for(let k=1;k<=h[2];k++)pts.push(ROUTE[k]);pts.push([h[0],h[1]])}
+ ctx.lineCap=ctx.lineJoin='round';ctx.setLineDash([5,7]);ctx.strokeStyle='rgba(226,100,63,.55)';ctx.lineWidth=3;ctx.beginPath();ROUTE.forEach((p,k)=>k?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();ctx.setLineDash([]);
+ const line=(w,c)=>{ctx.strokeStyle=c;ctx.lineWidth=w;ctx.beginPath();pts.forEach((p,k)=>k?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke()};
+ line(10,'rgba(43,43,58,.12)');line(8,'#FFFFFF');line(4.5,'#E2643F');
+ {const [hx,hy]=ptAt(s),p=(t*.9)%1;ctx.strokeStyle=`rgba(226,100,63,${1-p})`;ctx.lineWidth=2.4;ctx.beginPath();ctx.arc(hx,hy,5+p*22,0,7);ctx.stroke()}
+ // 云影 + 飞鸟（相对镜头缓慢横移）
+ for(const [ox,oy,v] of[[-700,-120,70],[200,220,55]]){const x=cx+ox+t*v-600*(v/70),y=cy+oy;ctx.fillStyle='rgba(43,43,58,.055)';ctx.beginPath();
+  for(const [dx,dy,r] of[[0,0,70],[60,-20,55],[-60,10,50],[110,15,45],[30,35,50]]){ctx.moveTo(x+dx+r,y+dy);ctx.arc(x+dx,y+dy,r,0,7)}ctx.fill()}
+ const bird=(bx,by,fl,sh)=>{ctx.strokeStyle=sh?'rgba(43,43,58,.15)':P.ink;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(bx-8,by-fl);ctx.lineTo(bx,by);ctx.lineTo(bx+8,by-fl);ctx.stroke()};
+ for(const [t0,dir] of[[0,1],[11,-1],[20,1]]){const u=(t-t0)/12;if(u<0||u>1)continue;
+  for(let b=0;b<4;b++){const bx=cx+dir*(-520+1040*u)+b*15*dir,by=cy+180-320*u+b*12+8*Math.sin(t+b),fl=Math.sin(t*14+b)*6;bird(bx+14,by+22,fl,1);bird(bx,by,fl,0)}}
+}
+
+// ---- 屏幕层：定位针 + 景点卡片（不随镜头旋转，文字保持水平） ----
+function pins(t,s,M){const hp=M.transformPoint(new DOMPoint(...ptAt(s)));
+ STOPS.forEach(st=>{const k=(t-st.tr)/.45;if(k<0)return;const p=M.transformPoint(new DOMPoint(st.x,st.y)),sc=backOut(k),a=Math.min(1,k*3);
+  ctx.save();ctx.globalAlpha=a;ctx.translate(p.x,p.y);
+  circ(ctx,1,1.5,5.5,'rgba(43,43,58,.2)');circ(ctx,0,0,5.5,'#FFFFFF');circ(ctx,0,0,3.6,st.c);
+  ctx.scale(sc,sc);ctx.font=`700 16px ${ZH}`;const w1=ctx.measureText(st.zh).width;ctx.font=`11px ${EN}`;const w2=ctx.measureText(st.en).width,w=Math.max(w1,w2)+26,h=42,y0=-14-h;
+  ctx.fillStyle='rgba(43,43,58,.14)';ctx.beginPath();ctx.roundRect(-w/2+3,y0+4,w,h,9);ctx.fill();
+  ctx.fillStyle='#FFFFFF';ctx.beginPath();ctx.roundRect(-w/2,y0,w,h,9);ctx.fill();ctx.beginPath();ctx.moveTo(-6,-14.5);ctx.lineTo(0,-7);ctx.lineTo(6,-14.5);ctx.fill();
+  ctx.fillStyle=st.c;ctx.beginPath();ctx.roundRect(-w/2,y0,5,h,[9,0,0,9]);ctx.fill();
+  ctx.textAlign='center';ctx.fillStyle=P.ink;ctx.font=`700 16px ${ZH}`;ctx.fillText(st.zh,2,y0+19);ctx.fillStyle='#7A778A';ctx.font=`11px ${EN}`;ctx.fillText(st.en,2,y0+34);ctx.restore()});
+ // 定位针（行进中的“我”）
+ const bob=Math.abs(Math.sin(t*5))*3;ctx.fillStyle='rgba(43,43,58,.22)';ctx.beginPath();ctx.ellipse(hp.x+2,hp.y+2,6,2.6,0,0,7);ctx.fill();
+ ctx.save();ctx.translate(hp.x,hp.y-bob);ctx.fillStyle='#E2643F';ctx.beginPath();ctx.moveTo(0,0);ctx.bezierCurveTo(-4,-8,-11,-12,-11,-20);ctx.arc(0,-20,11,Math.PI,0);ctx.bezierCurveTo(11,-12,4,-8,0,0);ctx.fill();
+ circ(ctx,0,-20,4.5,'#FFFFFF');ctx.restore()}
+
+// ---- 岛状遮罩：外圈铺纸色，边缘一圈颗粒溶解 ----
+const BOX={x:90,y:34,w:W-180,h:716},MC=[W/2,BOX.y+BOX.h/2];
+const grain=document.createElement('canvas');grain.width=W;grain.height=H;{const g=grain.getContext('2d'),Rg=rng(3);
+ const band=56,dist=(x,y)=>Math.max(BOX.x-x,x-BOX.x-BOX.w,BOX.y-y,y-BOX.y-BOX.h);
+ g.fillStyle=P.paper;g.beginPath();g.rect(0,0,W,H);g.rect(BOX.x+BOX.w+band,BOX.y-band,-BOX.w-2*band,BOX.h+2*band);g.fill('evenodd');
+ for(let y=0;y<H;y+=3)for(let x=0;x<W;x+=3){const d=dist(x,y);if(d<-band-6||d>band)continue;
+  const u=Math.max(0,Math.min(1,(d+band)/(2*band))),p=u*u*(3-2*u);
+  if(Rg()<p){g.fillStyle=P.paper;const s=2+Rg()*3+u*2;g.fillRect(x-s/2,y-s/2,s,s)}}
+ for(let k=0;k<9000;k++){const x=Rg()*W,y=Rg()*H,d=dist(x,y);
+  if(d>=band*.6&&d<band+50&&Rg()<.5){g.fillStyle=[P.sky,P.rape,P.mint,P.coral,P.pink][Rg()*5|0];g.fillRect(x,y,2,2)}}}
+
+function caption(t,s){const cx=W/2;ctx.fillStyle=P.paper;ctx.fillRect(0,806,W,H-806);ctx.textAlign='center';ctx.textBaseline='alphabetic';
+ circ(ctx,cx-24,820,5,P.rape);ctx.fillStyle=P.pink;ctx.beginPath();ctx.moveTo(cx-5,825);ctx.lineTo(cx,815);ctx.lineTo(cx+5,825);ctx.fill();
+ ctx.strokeStyle=P.sky;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(cx+16,820);ctx.quadraticCurveTo(cx+21,814,cx+26,820);ctx.stroke();
+ ctx.fillStyle=P.ink;ctx.font=`700 32px ${ZH}`;ctx.fillText('台中 · 台灣大道漫遊  Taichung · Taiwan Blvd',cx,862);
+ ctx.fillStyle=P.gray;ctx.font=`16px ${ZH}`;ctx.fillText('國家歌劇院 → 第二市場   National Taichung Theater → Second Market',cx,890);
+ // 路线进度条：每个景点一个节点
+ const bx0=150,bx1=W-150,by=916,u=s/L;
+ ctx.strokeStyle='#E4E1EA';ctx.lineWidth=4;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(bx0,by);ctx.lineTo(bx1,by);ctx.stroke();
+ ctx.strokeStyle='#E2643F';ctx.beginPath();ctx.moveTo(bx0,by);ctx.lineTo(bx0+(bx1-bx0)*u,by);ctx.stroke();
+ let cur=0;STOPS.forEach((st,k)=>{const x=bx0+(bx1-bx0)*st.s/L,on=t>=st.tr;if(on)cur=k;circ(ctx,x,by,on?5:3.5,on?st.c:'#D6D3DE');if(on)circ(ctx,x,by,2,'#FFFFFF')});
+ circ(ctx,bx0+(bx1-bx0)*u,by,7,'#E2643F');circ(ctx,bx0+(bx1-bx0)*u,by,3,'#FFFFFF');
+ // 当前景点：名称 + 中英一句话（切换时淡入上浮）
+ const st=STOPS[cur],a=Math.max(0,Math.min(1,cur==0?1:(t-st.tr)/.35)),dy=(1-a)*6;ctx.globalAlpha=a;
+ ctx.font=`700 25px ${ZH}`;const w1=ctx.measureText(st.zh).width;ctx.font=`500 18px ${EN}`;const w2=ctx.measureText(st.en).width,gx=cx-(w1+14+w2)/2;
+ ctx.textAlign='left';ctx.fillStyle=st.c;ctx.font=`700 25px ${ZH}`;ctx.fillText(st.zh,gx,960+dy);ctx.fillStyle='#55526A';ctx.font=`500 18px ${EN}`;ctx.fillText(st.en,gx+w1+14,960+dy);
+ ctx.textAlign='center';ctx.fillStyle=P.ink;ctx.font=`500 20px ${ZH}`;ctx.fillText(st.tz,cx,996+dy);
+ ctx.fillStyle='#6F6C80';ctx.font=`16px ${EN}`;ctx.fillText(st.te,cx,1023+dy);ctx.globalAlpha=1;
+ ctx.fillStyle='#A9A6B4';ctx.font='12px Consolas,"Courier New",monospace';ctx.fillText('24.16° N 120.64° E   →   24.14° N 120.68° E',cx,1060)}
+
+function frame(i){const t=i/FPS,p=ease(i/(N-1)),s=sAt(t),cam=camAt(s),sc=1.06+.16*p;
+ ctx.fillStyle=P.paper;ctx.fillRect(0,0,W,H);
+ ctx.save();ctx.translate(MC[0],MC[1]);ctx.scale(sc,sc);ctx.rotate((-3+6*p)*Math.PI/180);ctx.translate(-cam[0],-cam[1]);
+ const M=ctx.getTransform();world(t,s,cam,600/sc);ctx.restore();
+ pins(t,s,M);ctx.drawImage(grain,0,0);caption(t,s)}
+window.frame=frame;window.N=N;window.FPS=FPS;
+if(!navigator.webdriver){let t0=null;(function loop(ts){if(t0==null)t0=ts;frame(Math.floor((ts-t0)/1000*FPS)%N);requestAnimationFrame(loop)})(performance.now())}
+</script>
